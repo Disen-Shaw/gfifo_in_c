@@ -135,7 +135,7 @@
   }                                                                            \
                                                                                \
   /**                                                                          \
-   * @brief Pop a single element from FIFO.                                   \
+   * @brief Pop a single element from FIFO.                                    \
    *                                                                           \
    * @param f FIFO instance.                                                   \
    * @param e Pointer to output element.                                       \
@@ -155,7 +155,7 @@
   }                                                                            \
                                                                                \
   /**                                                                          \
-   * @brief Drop one element from FIFO without returning it.                  \
+   * @brief Drop one element from FIFO without returning it.                   \
    *                                                                           \
    * @param f FIFO instance.                                                   \
    *                                                                           \
@@ -172,7 +172,33 @@
   }                                                                            \
                                                                                \
   /**                                                                          \
-   * @brief Read the first element without removing it.                       \
+   * @brief Drop Number of element from FIFO without returning it.             \
+   *                                                                           \
+   * @param f FIFO instance.                                                   \
+   * @param cnt Number of element to drop                                      \
+   *                                                                           \
+   * @return true  Element dropped.                                            \
+   * @return false FIFO is empty.                                              \
+   */                                                                          \
+  static inline bool gfifo_##name##_drop_multi(gfifo_##name##_t *f,            \
+                                               uint32_t cnt) {                 \
+    uint32_t in = *(volatile uint32_t *)&f->i;                                 \
+    uint32_t out = *(volatile uint32_t *)&f->o;                                \
+    uint32_t cap = f->cap;                                                     \
+    uint32_t msk = f->msk;                                                     \
+    uint32_t cnt = in - out;                                                   \
+    if (len == 0) {                                                            \
+      return true;                                                             \
+    }                                                                          \
+    if (cnt < len) {                                                           \
+      return false;                                                            \
+    }                                                                          \
+    *(volatile uint32_t *)&f->o = out + len;                                   \
+    return true;                                                               \
+  }                                                                            \
+                                                                               \
+  /**                                                                          \
+   * @brief Read the first element without removing it.                        \
    *                                                                           \
    * @param f FIFO instance.                                                   \
    * @param e Pointer to output element.                                       \
@@ -192,11 +218,11 @@
   }                                                                            \
                                                                                \
   /**                                                                          \
-   * @brief Read element at offset without removing it.                       \
+   * @brief Read element at offset without removing it.                        \
    *                                                                           \
-   * @param f FIFO instance.                                               \
-   * @param e Pointer to output element.                                   \
-   * @param ofst Offset from head (0 = first element).                        \
+   * @param f FIFO instance.                                                   \
+   * @param e Pointer to output element.                                       \
+   * @param ofst Offset from head (0 = first element).                         \
    *                                                                           \
    * @return true  Element available.                                          \
    * @return false Offset out of range.                                        \
@@ -214,12 +240,12 @@
   }                                                                            \
                                                                                \
   /**                                                                          \
-   * @brief Push multiple elements into FIFO.                                 \
+   * @brief Push multiple elements into FIFO.                                  \
    *                                                                           \
    * Handles wrap_around automatically and uses memcpy() for efficient bulk    \
    * transfer.                                                                 \
    *                                                                           \
-   * @param f FIFO instance.                                                 \
+   * @param f FIFO instance.                                                   \
    * @param arr Source array.                                                  \
    * @param len Number of elements to push.                                    \
    *                                                                           \
@@ -251,12 +277,12 @@
   }                                                                            \
                                                                                \
   /**                                                                          \
-   * @brief Pop multiple elements from FIFO.                                  \
+   * @brief Pop multiple elements from FIFO.                                   \
    *                                                                           \
    * Handles wrap_around automatically and uses memcpy() for efficient bulk    \
    * transfer.                                                                 \
    *                                                                           \
-   * @param f FIFO instance.                                                 \
+   * @param f FIFO instance.                                                   \
    * @param arr Destination array.                                             \
    * @param len Number of elements to pop.                                     \
    *                                                                           \
