@@ -1,129 +1,138 @@
 
 /**
- * @file gfifo.h
- * @brief Generic typed ring FIFO implementation.
+ * @file sfifo.h
+ * @brief Static, fixed‑capacity lock‑free FIFO implementation.
  *
- * @details
- * Provides a macro to declare a strongly-typed FIFO and its full API:
- *   - init/reset
- *   - push/pop/drop
- *   - peek/peek_at
- *   - bulk push/pop with wrap-around handling
+ * This module provides a compile‑time sized circular FIFO buffer with
+ * zero dynamic allocation and no locking requirements. The FIFO is
+ * implemented using a power‑of‑two sized ring buffer, enabling fast
+ * index wrapping via bit masking.
  *
- * Designed for SPSC usage with power-of-two capacity.
+ * Features:
+ *   - Fixed capacity defined at compile time
+ *   - Lock‑free single‑producer / single‑consumer operation
+ *   - Constant‑time push/pop/peek operations
+ *   - Efficient bulk push/pop for contiguous or wrapped regions
+ *   - Header‑only, fully inlined implementation
  *
- * @author
- *   Disen-Shaw <DisenShaw@gmail.com>
- * @date
- *   2026-01-19
- * @license MIT
+ * Usage:
+ *   DECLARE_SFIFO_TYPE(byte, uint8_t, 1024);
+ *   sfifo_byte_1024_t fifo;
+ *   sfifo_byte_1024_init(&fifo);
+ *
+ * Constraints:
+ *   - FIFO size must be a power of two
+ *   - Not safe for multi‑writer or multi‑reader without external sync
+ *
+ * This module is suitable for embedded systems, protocol stacks,
+ * DMA pipelines, ISR-to-task communication, and any scenario requiring
+ * deterministic, allocation‑free buffering.
  */
 
-#ifndef __GFIFO_H__
-#define __GFIFO_H__
+#ifndef __SFIFO_H__
+#define __SFIFO_H__
 
 #include <stdbool.h>
 #include <stdint.h>
 #include <string.h>
 
 /**
- * @brief  Declare a generic ring FIFO type and its associated operations.
+ * @brief Declare a static FIFO type with fixed capacity.
  *
- * This macro generates a strongly‑typed FIFO structure and a full set of
- * inline operations, including push/pop, peek, drop, and bulk array
- * read/write. The FIFO uses a power‑of‑two sized ring buffer and relies on
- * natural unsigned overflow of monotonic indices (i/o) for distance
- * calculation.
+ * This macro generates:
+ *   - A struct type: sfifo_<name>_<size>_t
+ *   - Inline functions for FIFO operations
  *
- * @param name  Suffix used to form the FIFO type name.
- * @param type  Element type stored in the FIFO.
+ * Requirements:
+ *   - size must be a power of 2
  *
- * The generated type is:
- *     gfifo_<name>_t
- *
- * All operations are O(1) and safe for single‑producer / single‑consumer
- * (SPSC) usage. Multi‑threaded usage requires external synchronization.
+ * @param name  Logical name of the FIFO type
+ * @param type  Element type stored in the FIFO
+ * @param size  FIFO capacity (must be power of 2)
  */
-#define DECLARE_GFIFO_TYPE(name, type)                                         \
+#define DECLARE_SFIFO_TYPE(name, type, size)                                   \
+  _Static_assert(((size) & ((size) - 1)) == 0,                                 \
+                 "sfifo size must be power of 2");                             \
   typedef struct {                                                             \
-    type *buf;                                                                 \
+    type buf[size];                                                            \
     uint32_t cap;                                                              \
     uint32_t msk;                                                              \
     volatile uint32_t i;                                                       \
     volatile uint32_t o;                                                       \
-  } gfifo_##name##_t;                                                          \
+  } sfifo_##name##_##size##_t;                                                 \
                                                                                \
   /**                                                                          \
-   * @brief Initialize FIFO with user_provided buffer.                         \
+   * @brief Initialize FIFO state.                                             \
    *                                                                           \
-   * @param f FIFO instance.                                                   \
+   * Sets read/write indices to zero and configures capacity and mask.         \
+   * Must be called before any push/pop operations.                            \
    *                                                                           \
-   * @return true  Initialization succeeded.                                   \
-   * @return false Invalid size or NULL buffer.                                \
+   * @param f Pointer to FIFO instance                                         \
+   * @return true if initialized, false if f is NULL                           \
    */                                                                          \
-  static inline bool gfifo_##name##_init(gfifo_##name##_t *f, type *buf,       \
-                                         uint32_t size) {                      \
-    if (size == 0 || (size & (size - 1)) != 0 || buf == NULL) {                \
+  static inline bool sfifo_##name##_##size##_init(                             \
+      sfifo_##name##_##size##_t *f) {                                          \
+    if (f == NULL) {                                                           \
       return false;                                                            \
     }                                                                          \
     f->i = f->o = 0;                                                           \
-    f->buf = buf;                                                              \
     f->cap = size;                                                             \
     f->msk = size - 1;                                                         \
     return true;                                                               \
   }                                                                            \
                                                                                \
   /**                                                                          \
-   * @brief  Reset FIFO indices, clearing all stored elements.                 \
+   * @brief Reset FIFO to empty state.                                         \
    *                                                                           \
-   * @param f FIFO instance.                                                   \
+   * Clears read/write indices without modifying buffer contents.              \
+   * Safe to call at any time.                                                 \
    */                                                                          \
-  static inline void gfifo_##name##_reset(gfifo_##name##_t *f) {               \
+  static inline void sfifo_##name##_##size##_reset(                            \
+      sfifo_##name##_##size##_t *f) {                                          \
     f->i = f->o = 0;                                                           \
   }                                                                            \
                                                                                \
   /**                                                                          \
-   * @brief  Check whether FIFO is empty.                                      \
+   * @brief Check whether FIFO contains no elements.                           \
    *                                                                           \
-   * @param f FIFO instance.                                                   \
-   * @return true  FIFO contains no elements.                                  \
-   * @return false FIFO has at least one element.                              \
+   * @return true if empty, false otherwise                                    \
    */                                                                          \
-  static inline bool gfifo_##name##_is_empty(const gfifo_##name##_t *f) {      \
+  static inline bool sfifo_##name##_##size##_is_empty(                         \
+      const sfifo_##name##_##size##_t *f) {                                    \
     return f->i == f->o;                                                       \
   }                                                                            \
                                                                                \
   /**                                                                          \
-   * @brief  Check whether FIFO is full.                                       \
+   * @brief Check whether FIFO is full.                                        \
    *                                                                           \
-   * @param f FIFO instance.                                                   \
-   * @return true  FIFO is full.                                               \
-   * @return false FIFO has free space.                                        \
+   * Full means (i - o) == capacity.                                           \
+   *                                                                           \
+   * @return true if full, false otherwise                                     \
    */                                                                          \
-  static inline bool gfifo_##name##_is_full(const gfifo_##name##_t *f) {       \
+  static inline bool sfifo_##name##_##size##_is_full(                          \
+      const sfifo_##name##_##size##_t *f) {                                    \
     return (f->i - f->o) == f->cap;                                            \
   }                                                                            \
                                                                                \
   /**                                                                          \
-   * @brief Get number of stored elements.                                     \
+   * @brief Get number of elements currently stored in FIFO.                   \
    *                                                                           \
-   * @param f FIFO instance.                                                   \
-   * @return Number of elements currently in FIFO.                             \
+   * @return Element count                                                     \
    */                                                                          \
-  static inline uint32_t gfifo_##name##_count(const gfifo_##name##_t *f) {     \
+  static inline uint32_t sfifo_##name##_##size##_count(                        \
+      const sfifo_##name##_##size##_t *f) {                                    \
     return (f->i - f->o);                                                      \
   }                                                                            \
                                                                                \
   /**                                                                          \
-   * @brief Push a single element into FIFO.                                   \
+   * @brief Push one element into FIFO.                                        \
    *                                                                           \
-   * @param f FIFO instance.                                                   \
-   * @param e Pointer to element to push.                                      \
-   *                                                                           \
-   * @return true  Element pushed.                                             \
-   * @return false FIFO is full.                                               \
+   * @param f FIFO instance                                                    \
+   * @param e Pointer to element to push                                       \
+   * @return true if pushed, false if FIFO is full                             \
    */                                                                          \
-  static inline bool gfifo_##name##_push(gfifo_##name##_t *f, const type *e) { \
+  static inline bool sfifo_##name##_##size##_push(                             \
+      sfifo_##name##_##size##_t *f, const type *e) {                           \
     uint32_t cnt = f->i - f->o;                                                \
     if (cnt < f->cap) {                                                        \
       uint32_t idx = f->i;                                                     \
@@ -135,15 +144,14 @@
   }                                                                            \
                                                                                \
   /**                                                                          \
-   * @brief Pop a single element from FIFO.                                    \
+   * @brief Pop one element from FIFO.                                         \
    *                                                                           \
-   * @param f FIFO instance.                                                   \
-   * @param e Pointer to output element.                                       \
-   *                                                                           \
-   * @return true  Element popped.                                             \
-   * @return false FIFO is empty.                                              \
+   * @param f FIFO instance                                                    \
+   * @param e Output pointer for popped element                                \
+   * @return true if popped, false if FIFO is empty                            \
    */                                                                          \
-  static inline bool gfifo_##name##_pop(gfifo_##name##_t *f, type *e) {        \
+  static inline bool sfifo_##name##_##size##_pop(sfifo_##name##_##size##_t *f, \
+                                                 type *e) {                    \
     uint32_t cnt = f->i - f->o;                                                \
     if (cnt > 0) {                                                             \
       uint32_t idx = f->o;                                                     \
@@ -155,14 +163,12 @@
   }                                                                            \
                                                                                \
   /**                                                                          \
-   * @brief Drop one element from FIFO without returning it.                   \
+   * @brief Drop (discard) one element from FIFO.                              \
    *                                                                           \
-   * @param f FIFO instance.                                                   \
-   *                                                                           \
-   * @return true  Element dropped.                                            \
-   * @return false FIFO is empty.                                              \
+   * @return true if dropped, false if FIFO is empty                           \
    */                                                                          \
-  static inline bool gfifo_##name##_drop(gfifo_##name##_t *f) {                \
+  static inline bool sfifo_##name##_##size##_drop(                             \
+      sfifo_##name##_##size##_t *f) {                                          \
     uint32_t cnt = f->i - f->o;                                                \
     if (cnt > 0) {                                                             \
       f->o++;                                                                  \
@@ -172,41 +178,14 @@
   }                                                                            \
                                                                                \
   /**                                                                          \
-   * @brief Drop Number of element from FIFO without returning it.             \
+   * @brief Peek the first element without removing it.                        \
    *                                                                           \
-   * @param f FIFO instance.                                                   \
-   * @param cnt Number of element to drop                                      \
-   *                                                                           \
-   * @return true  Element dropped.                                            \
-   * @return false FIFO is empty.                                              \
+   * @param f FIFO instance                                                    \
+   * @param e Output pointer for peeked element                                \
+   * @return true if element available, false otherwise                        \
    */                                                                          \
-  static inline bool gfifo_##name##_drop_multi(gfifo_##name##_t *f,            \
-                                               uint32_t cnt) {                 \
-    uint32_t in = *(volatile uint32_t *)&f->i;                                 \
-    uint32_t out = *(volatile uint32_t *)&f->o;                                \
-    uint32_t cap = f->cap;                                                     \
-    uint32_t msk = f->msk;                                                     \
-    uint32_t cnt = in - out;                                                   \
-    if (len == 0) {                                                            \
-      return true;                                                             \
-    }                                                                          \
-    if (cnt < len) {                                                           \
-      return false;                                                            \
-    }                                                                          \
-    *(volatile uint32_t *)&f->o = out + len;                                   \
-    return true;                                                               \
-  }                                                                            \
-                                                                               \
-  /**                                                                          \
-   * @brief Read the first element without removing it.                        \
-   *                                                                           \
-   * @param f FIFO instance.                                                   \
-   * @param e Pointer to output element.                                       \
-   *                                                                           \
-   * @return true  Element available.                                          \
-   * @return false FIFO is empty.                                              \
-   */                                                                          \
-  static inline bool gfifo_##name##_peek(const gfifo_##name##_t *f, type *e) { \
+  static inline bool sfifo_##name##_##size##_peek(                             \
+      const sfifo_##name##_##size##_t *f, type *e) {                           \
     uint32_t cnt = f->i - f->o;                                                \
     uint32_t idx;                                                              \
     if (cnt > 0) {                                                             \
@@ -218,17 +197,15 @@
   }                                                                            \
                                                                                \
   /**                                                                          \
-   * @brief Read element at offset without removing it.                        \
+   * @brief Peek element at a given offset without removing it.                \
    *                                                                           \
-   * @param f FIFO instance.                                                   \
-   * @param e Pointer to output element.                                       \
-   * @param ofst Offset from head (0 = first element).                         \
-   *                                                                           \
-   * @return true  Element available.                                          \
-   * @return false Offset out of range.                                        \
+   * @param f FIFO instance                                                    \
+   * @param e Output pointer                                                   \
+   * @param ofst Offset from head (0 = first element)                          \
+   * @return true if valid offset, false otherwise                             \
    */                                                                          \
-  static inline bool gfifo_##name##_peek_at(const gfifo_##name##_t *f,         \
-                                            type *e, uint32_t ofst) {          \
+  static inline bool sfifo_##name##_##size##_peek_at(                          \
+      const sfifo_##name##_##size##_t *f, type *e, uint32_t ofst) {            \
     uint32_t cnt = f->i - f->o;                                                \
     uint32_t idx;                                                              \
     if (ofst < cnt) {                                                          \
@@ -240,20 +217,18 @@
   }                                                                            \
                                                                                \
   /**                                                                          \
-   * @brief Push multiple elements into FIFO.                                  \
+   * @brief Push an array of elements into FIFO.                               \
    *                                                                           \
-   * Handles wrap_around automatically and uses memcpy() for efficient bulk    \
-   * transfer.                                                                 \
+   * Handles wrap_around automatically and performs at most two memcpy()       \
+   * operations depending on buffer alignment.                                 \
    *                                                                           \
-   * @param f FIFO instance.                                                   \
-   * @param arr Source array.                                                  \
-   * @param len Number of elements to push.                                    \
-   *                                                                           \
-   * @return true  All elements pushed.                                        \
-   * @return false Not enough free space.                                      \
+   * @param f FIFO instance                                                    \
+   * @param arr Input array                                                    \
+   * @param len Number of elements to push                                     \
+   * @return true if all elements pushed, false if insufficient space          \
    */                                                                          \
-  static inline bool gfifo_##name##_push_array(                                \
-      gfifo_##name##_t *f, const type *arr, uint32_t len) {                    \
+  static inline bool sfifo_##name##_##size##_push_array(                       \
+      sfifo_##name##_##size##_t *f, const type *arr, uint32_t len) {           \
     uint32_t in = *(volatile uint32_t *)&f->i;                                 \
     uint32_t out = *(volatile uint32_t *)&f->o;                                \
     uint32_t cap = f->cap;                                                     \
@@ -277,20 +252,18 @@
   }                                                                            \
                                                                                \
   /**                                                                          \
-   * @brief Pop multiple elements from FIFO.                                   \
+   * @brief Pop an array of elements from FIFO.                                \
    *                                                                           \
-   * Handles wrap_around automatically and uses memcpy() for efficient bulk    \
-   * transfer.                                                                 \
+   * Handles wrap_around automatically and performs at most two memcpy()       \
+   * operations depending on buffer alignment.                                 \
    *                                                                           \
-   * @param f FIFO instance.                                                   \
-   * @param arr Destination array.                                             \
-   * @param len Number of elements to pop.                                     \
-   *                                                                           \
-   * @return true  All elements popped.                                        \
-   * @return false FIFO does not contain enough elements.                      \
+   * @param f FIFO instance                                                    \
+   * @param arr Output array                                                   \
+   * @param len Number of elements to pop                                      \
+   * @return true if all elements popped, false if insufficient data           \
    */                                                                          \
-  static inline bool gfifo_##name##_pop_array(gfifo_##name##_t *f, type *arr,  \
-                                              uint32_t len) {                  \
+  static inline bool sfifo_##name##_##size##_pop_array(                        \
+      sfifo_##name##_##size##_t *f, type *arr, uint32_t len) {                 \
     uint32_t in = *(volatile uint32_t *)&f->i;                                 \
     uint32_t out = *(volatile uint32_t *)&f->o;                                \
     uint32_t cap = f->cap;                                                     \
@@ -313,4 +286,4 @@
     return true;                                                               \
   }
 
-#endif //! __GFIFO_H__
+#endif //! __SFIFO_H__
